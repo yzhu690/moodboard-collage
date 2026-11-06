@@ -1,7 +1,17 @@
 /**
  * 画布编辑器：场景渲染 / 拖拽 / 缩放 / 旋转 / 图层 / 构图骨架 / 导出
- * 预览与导出使用同一套绘制逻辑，导出时只保留中心 1200×900 区域。
+ * 预览与导出使用同一套绘制逻辑，导出时只保留中心画布区域（尺寸随比例变化）。
  */
+
+import { t } from './i18n.js';
+
+/** 画布比例预设：竖版两档对齐小红书常用尺寸 */
+export const RATIO_PRESETS = [
+  { id: '4:3', label: '4:3', w: 1200, h: 900, name: '横版', hint: '横版 1200 × 900' },
+  { id: '1:1', label: '1:1', w: 1200, h: 1200, name: '方形', hint: '方形 1200 × 1200' },
+  { id: '3:4', label: '3:4', w: 1080, h: 1440, name: '竖版', hint: '小红书竖版 1080 × 1440' },
+  { id: '9:16', label: '9:16', w: 1080, h: 1920, name: '全屏竖版', hint: '全屏竖版 1080 × 1920' },
+];
 
 export const CANVAS_W = 1200;
 export const CANVAS_H = 900;
@@ -58,8 +68,6 @@ function drawTextBlock(ctx, item) {
 }
 
 /* ---------------- 构图指引骨架 ---------------- */
-
-const GUIDE_NAMES = ['关闭', '锚点色块式', '纵向叙事长条式', '集群组团式', '居中焦点式'];
 
 function dashCircle(ctx, cx, cy, r, opt = {}) {
   ctx.save();
@@ -137,61 +145,161 @@ function tag(ctx, text, x, y, opt = {}) {
 }
 
 /* 四套骨架 × 三档位置圆（3 / 5 / 8）
-   每组圆的并集覆盖画布约 54%，留白约 46% —— 按圆铺满后留白不会超过 50% */
-const GUIDE_SLOTS = {
-  1: {
-    3: [[300, 300, 254], [900, 300, 254], [600, 620, 254]],
-    5: [[300, 300, 232], [900, 300, 232], [600, 620, 232], [600, 255, 134], [1065, 640, 116]],
-    8: [[300, 300, 221], [900, 300, 221], [600, 620, 221], [600, 255, 128], [1065, 640, 111],
-        [185, 655, 88], [770, 125, 75], [455, 795, 66]],
+   坐标全部归一化（nx, ny 相对画布宽高，rr 相对画布宽度），
+   由 solveGuide() 按当前画布比例反解缩放系数，保证每组圆的并集覆盖 ≈54%（留白 ≈46%）。
+   这样 4:3 / 1:1 / 3:4 / 9:16 都能维持同一套构图密度，切换比例骨架自动适配。 */
+const GUIDE_LAYOUTS = {
+  wide: {
+    1: {
+      3: [[0.250, 0.333, 0.2117], [0.750, 0.333, 0.2117], [0.500, 0.689, 0.2117]],
+      5: [[0.250, 0.333, 0.1933], [0.750, 0.333, 0.1933], [0.500, 0.689, 0.1933],
+          [0.500, 0.283, 0.1117], [0.888, 0.711, 0.0967]],
+      8: [[0.250, 0.333, 0.1842], [0.750, 0.333, 0.1842], [0.500, 0.689, 0.1842],
+          [0.500, 0.283, 0.1067], [0.888, 0.711, 0.0925], [0.154, 0.728, 0.0733],
+          [0.642, 0.139, 0.0625], [0.379, 0.883, 0.0550]],
+    },
+    2: {
+      3: [[0.342, 0.302, 0.2242], [0.658, 0.502, 0.2242], [0.358, 0.711, 0.2242]],
+      5: [[0.342, 0.302, 0.2042], [0.658, 0.502, 0.2042], [0.358, 0.711, 0.2042],
+          [0.658, 0.200, 0.1125], [0.583, 0.842, 0.1025]],
+      8: [[0.342, 0.302, 0.1900], [0.658, 0.502, 0.1900], [0.358, 0.711, 0.1900],
+          [0.658, 0.200, 0.1050], [0.583, 0.842, 0.0950], [0.171, 0.478, 0.0758],
+          [0.840, 0.678, 0.0683], [0.500, 0.111, 0.0575]],
+    },
+    3: {
+      3: [[0.250, 0.333, 0.2117], [0.508, 0.711, 0.2117], [0.742, 0.367, 0.2117]],
+      5: [[0.250, 0.333, 0.2067], [0.508, 0.711, 0.2067], [0.742, 0.367, 0.2067],
+          [0.379, 0.222, 0.1133], [0.667, 0.672, 0.1033]],
+      8: [[0.250, 0.333, 0.1925], [0.508, 0.711, 0.1925], [0.742, 0.367, 0.1925],
+          [0.379, 0.222, 0.1058], [0.667, 0.672, 0.0958], [0.104, 0.772, 0.0767],
+          [0.871, 0.689, 0.0692], [0.583, 0.161, 0.0575]],
+    },
+    4: {
+      3: [[0.500, 0.500, 0.2183], [0.215, 0.287, 0.2183], [0.785, 0.713, 0.2183]],
+      5: [[0.500, 0.500, 0.1942], [0.215, 0.287, 0.1942], [0.785, 0.713, 0.1942],
+          [0.785, 0.287, 0.1067], [0.215, 0.713, 0.0975]],
+      8: [[0.500, 0.500, 0.1842], [0.215, 0.287, 0.1842], [0.785, 0.713, 0.1842],
+          [0.785, 0.287, 0.1017], [0.215, 0.713, 0.0925], [0.500, 0.887, 0.0742],
+          [0.500, 0.120, 0.0625], [0.893, 0.500, 0.0517]],
+    },
   },
-  2: {
-    3: [[410, 272, 269], [790, 452, 269], [430, 640, 269]],
-    5: [[410, 272, 245], [790, 452, 245], [430, 640, 245], [790, 180, 135], [700, 758, 123]],
-    8: [[410, 272, 228], [790, 452, 228], [430, 640, 228], [790, 180, 126], [700, 758, 114],
-        [205, 430, 91], [1008, 610, 82], [600, 100, 69]],
-  },
-  3: {
-    3: [[300, 300, 254], [610, 640, 254], [890, 330, 254]],
-    5: [[300, 300, 248], [610, 640, 248], [890, 330, 248], [455, 200, 136], [800, 605, 124]],
-    8: [[300, 300, 231], [610, 640, 231], [890, 330, 231], [455, 200, 127], [800, 605, 115],
-        [125, 695, 92], [1045, 620, 83], [700, 145, 69]],
-  },
-  4: {
-    3: [[600, 450, 262], [258, 258, 262], [942, 642, 262]],
-    5: [[600, 450, 233], [258, 258, 233], [942, 642, 233], [942, 258, 128], [258, 642, 117]],
-    8: [[600, 450, 221], [258, 258, 221], [942, 642, 221], [942, 258, 122], [258, 642, 111],
-        [600, 798, 89], [600, 108, 75], [1072, 450, 62]],
+  tall: {
+    1: {
+      3: [[0.300, 0.235, 0.2050], [0.700, 0.245, 0.2050], [0.500, 0.635, 0.2050]],
+      5: [[0.300, 0.235, 0.1930], [0.700, 0.245, 0.1930], [0.500, 0.635, 0.1930],
+          [0.500, 0.115, 0.1050], [0.815, 0.705, 0.0920]],
+      8: [[0.300, 0.235, 0.1830], [0.700, 0.245, 0.1830], [0.500, 0.635, 0.1830],
+          [0.500, 0.115, 0.1000], [0.815, 0.705, 0.0880], [0.165, 0.795, 0.0720],
+          [0.275, 0.455, 0.0620], [0.615, 0.905, 0.0540]],
+    },
+    2: {
+      3: [[0.355, 0.185, 0.2000], [0.645, 0.480, 0.2000], [0.365, 0.775, 0.2000]],
+      5: [[0.355, 0.185, 0.1880], [0.645, 0.480, 0.1880], [0.365, 0.775, 0.1880],
+          [0.665, 0.315, 0.0980], [0.675, 0.895, 0.0850]],
+      8: [[0.355, 0.185, 0.1780], [0.645, 0.480, 0.1780], [0.365, 0.775, 0.1780],
+          [0.665, 0.315, 0.0930], [0.675, 0.895, 0.0810], [0.165, 0.545, 0.0700],
+          [0.820, 0.625, 0.0600], [0.500, 0.055, 0.0520]],
+    },
+    3: {
+      3: [[0.325, 0.275, 0.1950], [0.630, 0.545, 0.1950], [0.385, 0.795, 0.1950]],
+      5: [[0.325, 0.275, 0.1860], [0.630, 0.545, 0.1860], [0.385, 0.795, 0.1860],
+          [0.715, 0.185, 0.1000], [0.215, 0.585, 0.0900]],
+      8: [[0.325, 0.275, 0.1760], [0.630, 0.545, 0.1760], [0.385, 0.795, 0.1760],
+          [0.715, 0.185, 0.0950], [0.215, 0.585, 0.0850], [0.630, 0.880, 0.0780],
+          [0.150, 0.155, 0.0620], [0.835, 0.735, 0.0580]],
+    },
+    4: {
+      3: [[0.500, 0.455, 0.2150], [0.265, 0.245, 0.1900], [0.740, 0.665, 0.1900]],
+      5: [[0.500, 0.455, 0.1920], [0.265, 0.245, 0.1760], [0.740, 0.665, 0.1760],
+          [0.735, 0.255, 0.0980], [0.255, 0.655, 0.0900]],
+      8: [[0.500, 0.455, 0.1820], [0.265, 0.245, 0.1660], [0.740, 0.665, 0.1660],
+          [0.735, 0.255, 0.0930], [0.255, 0.655, 0.0860], [0.500, 0.140, 0.0750],
+          [0.500, 0.855, 0.0700], [0.135, 0.880, 0.0550]],
+    },
   },
 };
 
-const GUIDE_AXIS = {
-  1: [[88, 296], [330, 272], [600, 258], [872, 268], [1112, 296]],
-  2: [[598, 96], [578, 268], [628, 470], [592, 806]],
-  3: [[268, 306], [430, 470], [600, 646], [790, 556], [880, 336]],
-  4: [[132, 566], [420, 500], [600, 462], [790, 496], [1064, 556]],
+/** 主轴：同样归一化，横版偏横向铺陈，竖版偏纵向串联 */
+const GUIDE_AXES = {
+  wide: {
+    1: [[0.073, 0.329], [0.275, 0.302], [0.500, 0.287], [0.727, 0.298], [0.927, 0.329]],
+    2: [[0.498, 0.107], [0.482, 0.298], [0.523, 0.522], [0.493, 0.896]],
+    3: [[0.223, 0.340], [0.358, 0.522], [0.500, 0.718], [0.658, 0.618], [0.733, 0.373]],
+    4: [[0.110, 0.629], [0.350, 0.556], [0.500, 0.513], [0.658, 0.551], [0.887, 0.618]],
+  },
+  tall: {
+    1: [[0.065, 0.255], [0.320, 0.235], [0.500, 0.228], [0.690, 0.235], [0.935, 0.258]],
+    2: [[0.500, 0.045], [0.470, 0.230], [0.530, 0.500], [0.480, 0.740], [0.500, 0.955]],
+    3: [[0.180, 0.300], [0.330, 0.430], [0.500, 0.560], [0.660, 0.640], [0.790, 0.740]],
+    4: [[0.090, 0.520], [0.350, 0.480], [0.500, 0.455], [0.660, 0.480], [0.910, 0.520]],
+  },
 };
 
-function drawGuide(ctx, index, count) {
+const GUIDE_TARGET = 0.54;   // 圆的并集覆盖画布 54%，留白 46%
+const guidePoolCache = new Map();
+
+/** 反解缩放系数：让这一组圆的并集面积恰好占画布 54% */
+function solveGuide(layout, W, H) {
+  const N = 80;
+  const stepX = W / N;
+  const stepY = H / N;
+  let lo = 0.08;
+  let hi = 4;
+  for (let it = 0; it < 24; it++) {
+    const k = (lo + hi) / 2;
+    let hit = 0;
+    for (let iy = 0; iy < N; iy++) {
+      const py = (iy + 0.5) * stepY;
+      for (let ix = 0; ix < N; ix++) {
+        const px = (ix + 0.5) * stepX;
+        for (let j = 0; j < layout.length; j++) {
+          const cx = layout[j][0] * W;
+          const cy = layout[j][1] * H;
+          const r = layout[j][2] * W * k;
+          const dx = px - cx;
+          const dy = py - cy;
+          if (dx * dx + dy * dy <= r * r) { hit++; break; }
+        }
+      }
+    }
+    if (hit / (N * N) < GUIDE_TARGET) lo = k; else hi = k;
+  }
+  const k = (lo + hi) / 2;
+  return layout.map(([nx, ny, rr]) => [nx * W, ny * H, rr * W * k]);
+}
+
+function guidePool(index, count, W, H) {
+  const orient = H > W ? 'tall' : 'wide';
+  const key = `${orient}-${index}-${count}-${W}x${H}`;
+  if (guidePoolCache.has(key)) return guidePoolCache.get(key);
+  const layout = (GUIDE_LAYOUTS[orient][index] || {})[count] || [];
+  const pool = layout.length ? solveGuide(layout, W, H) : [];
+  guidePoolCache.set(key, pool);
+  return pool;
+}
+
+function drawGuide(ctx, index, count, W, H) {
   const FILL = 'rgba(118, 106, 90, .03)';
   const S = 'rgba(112, 100, 84, .50)';
   const SS = 'rgba(112, 100, 84, .30)';
   const n = [3, 5, 8].includes(count) ? count : 5;
-  const pool = (GUIDE_SLOTS[index] || {})[n] || [];
+  const pool = guidePool(index, n, W, H);
+  const orient = H > W ? 'tall' : 'wide';
+  const axis = (GUIDE_AXES[orient][index] || []).map(([nx, ny]) => [nx * W, ny * H]);
 
   ctx.save();
   ctx.lineJoin = 'round';
 
   // 主轴：一条贯穿构图的虚线
-  axisLine(ctx, GUIDE_AXIS[index] || []);
+  axisLine(ctx, axis);
 
   // 纵向骨架的两条极淡阅读轨道
   if (index === 2) {
-    for (const x of [300, 900]) {
+    for (const fx of [0.25, 0.75]) {
       ctx.save();
       ctx.beginPath();
-      ctx.moveTo(x, 110);
-      ctx.lineTo(x, 815);
+      ctx.moveTo(fx * W, H * 0.10);
+      ctx.lineTo(fx * W, H * 0.94);
       ctx.setLineDash([2, 10]);
       ctx.strokeStyle = 'rgba(118, 106, 90, .12)';
       ctx.lineWidth = 1;
@@ -219,24 +327,31 @@ function drawGuide(ctx, index, count) {
     }
   }
 
-  // 文案
+  // 文案：边距按画布尺寸取比例，竖版不会跑出画面
+  const padX = W * 0.075;
+  const padTop = H * 0.052;
+  const padBot = H * 0.045;
+  const soft = 'rgba(108, 97, 82, .48)';
+
   if (index === 1) {
-    tag(ctx, 'COLOR ANCHORS · 色卡锚位', 90, 86, { size: 10 });
-    tag(ctx, 'FREE ZONE · 其余区域自由散放', 600, 838, { align: 'center', size: 10, fill: 'rgba(108, 97, 82, .48)' });
+    tag(ctx, t('guide.1.title.canvas'), padX, padTop, { size: 10 });
+    tag(ctx, t('guide.1.sub'), W / 2, H - padBot, { align: 'center', size: 10, fill: soft });
   } else if (index === 2) {
-    tag(ctx, 'VERTICAL STORY · 纵向叙事', 90, 86, { size: 10 });
-    tag(ctx, 'READ ↓ 由上至下分区叙事', 90, 836, { size: 10, fill: 'rgba(108, 97, 82, .48)' });
+    tag(ctx, t('guide.2.title.canvas'), padX, padTop, { size: 10 });
+    tag(ctx, t('guide.2.sub'), padX, H - padBot, { size: 10, fill: soft });
   } else if (index === 3) {
-    tag(ctx, 'CLUSTERS · 松散组团', 90, 86, { size: 10 });
-    tag(ctx, '留白 · 组团之间保持呼吸', 90, 836, { size: 10, fill: 'rgba(108, 97, 82, .48)' });
+    tag(ctx, t('guide.3.title.canvas'), padX, padTop, { size: 10 });
+    tag(ctx, t('guide.3.sub'), padX, H - padBot, { size: 10, fill: soft });
   } else if (index === 4) {
-    dashCircle(ctx, 600, 450, 96, { fill: 'transparent', stroke: SS, dash: [2, 9] });
-    tag(ctx, 'FOCUS · 中心焦点', 90, 86, { size: 10 });
-    tag(ctx, '负空间 · negative space', 90, 836, { size: 10, fill: 'rgba(108, 97, 82, .48)' });
+    dashCircle(ctx, W / 2, H / 2, W * 0.08, { fill: 'transparent', stroke: SS, dash: [2, 9] });
+    tag(ctx, t('guide.4.title.canvas'), padX, padTop, { size: 10 });
+    tag(ctx, t('guide.4.sub'), padX, H - padBot, { size: 10, fill: soft });
   }
 
   if (index > 0) {
-    tag(ctx, `构图指引 ${index} / 4 · ${GUIDE_NAMES[index]} · ${n} 个位置 · 留白 ≈46%`, 1112, 858, {
+    tag(ctx, t('guide.meta', {
+      index, name: t(`guide.name.${index}`), count: n,
+    }), W - W * 0.06, H - padBot, {
       size: 9, align: 'right', fill: 'rgba(108, 97, 82, .38)',
     });
   }
@@ -260,6 +375,14 @@ export class Editor {
     this.selected = null;
     this.cam = { x: 0, y: 0, z: 1 };
     this.tgt = { x: 0, y: 0, z: 1 };
+
+    // 画布尺寸：默认 4:3 横版，可在四档比例间切换
+    this.canvasW = CANVAS_W;
+    this.canvasH = CANVAS_H;
+    this.ratio = '4:3';
+
+    // 自定义背景：{ src, cx, cy, zoom }（cx/cy 是图片上对齐画布中心的归一化位置）
+    this.bg = null;
 
     this.guideIndex = 0;
     this.guideAlpha = 0;
@@ -310,11 +433,11 @@ export class Editor {
 
   fit(animate = true) {
     const padX = 96;
-    const padY = 96;
-    const z = Math.min((this.w - padX * 2) / CANVAS_W, (this.h - padY * 2) / CANVAS_H);
-    const zz = Math.max(0.12, Math.min(1.4, z));
-    const tx = (this.w - CANVAS_W * zz) / 2;
-    const ty = (this.h - CANVAS_H * zz) / 2;
+    const padY = 88;
+    const z = Math.min((this.w - padX * 2) / this.canvasW, (this.h - padY * 2) / this.canvasH);
+    const zz = Math.max(0.08, Math.min(1.4, z));
+    const tx = (this.w - this.canvasW * zz) / 2;
+    const ty = (this.h - this.canvasH * zz) / 2;
     if (animate) {
       this.tgt = { x: tx, y: ty, z: zz };
     } else {
@@ -322,6 +445,36 @@ export class Editor {
       this.tgt = { ...this.cam };
     }
     this.dirty = true;
+  }
+
+  /**
+   * 切换画布比例。素材不重排、不缩放，只整体平移 (Δw/2, Δh/2)，
+   * 让原有构图仍然居中：出画的素材留在原处，导出时按新画布裁切。
+   */
+  setCanvasSize(w, h, ratioId) {
+    if (w === this.canvasW && h === this.canvasH) {
+      if (ratioId) this.ratio = ratioId;
+      return false;
+    }
+    const dx = (w - this.canvasW) / 2;
+    const dy = (h - this.canvasH) / 2;
+    for (const it of this.items) {
+      it.x += dx;
+      it.y += dy;
+    }
+    this.canvasW = w;
+    this.canvasH = h;
+    if (ratioId) this.ratio = ratioId;
+    this.fit(true);
+    this.dirty = true;
+    this.emitChange();
+    return true;
+  }
+
+  setBackground(bg) {
+    this.bg = bg || null;
+    this.dirty = true;
+    this.emitChange();
   }
 
   resetView() {
@@ -352,7 +505,7 @@ export class Editor {
 
   canvasRectScreen() {
     const { x, y, z } = this.cam;
-    return { x, y, w: CANVAS_W * z, h: CANVAS_H * z };
+    return { x, y, w: this.canvasW * z, h: this.canvasH * z };
   }
 
   /* ---- 素材 ---- */
@@ -467,6 +620,11 @@ export class Editor {
     this.guideCount = n;
     if (this.guideAlpha > 0.45) this.guideAlpha = 0.45;
     this.dirty = true;
+  }
+
+  /** 当前画布比例下某套骨架的位置圆（供渲染与自检使用） */
+  guidePool(index = this.guideIndex, count = this.guideCount) {
+    return guidePool(index, count, this.canvasW, this.canvasH);
   }
 
   setGuide(i) {
@@ -808,6 +966,15 @@ export class Editor {
     ctx.globalAlpha = 0.6;
     ctx.fillRect(r.x, r.y, r.w, r.h);
     ctx.globalAlpha = 1;
+
+    // 自定义背景（在画布内、素材之下）
+    if (this.bg) {
+      ctx.save();
+      ctx.translate(this.cam.x, this.cam.y);
+      ctx.scale(this.cam.z, this.cam.z);
+      drawBackground(ctx, this.canvasW, this.canvasH, this.bg);
+      ctx.restore();
+    }
     ctx.restore();
 
     // 构图骨架（位于内容之下）
@@ -845,7 +1012,7 @@ export class Editor {
     ctx.globalAlpha = alpha;
     ctx.translate(this.cam.x, this.cam.y);
     ctx.scale(this.cam.z, this.cam.z);
-    drawGuide(ctx, index, this.guideCount);
+    drawGuide(ctx, index, this.guideCount, this.canvasW, this.canvasH);
     ctx.restore();
   }
 
@@ -963,30 +1130,48 @@ export class Editor {
 
   /* ---- 导出 ---- */
   async exportPNG(superSample = 2) {
-    // 先在 2 倍尺寸无背景绘制，再降采样到 1200×900，边缘更干净（超采样抗锯齿）
+    const W = this.canvasW;
+    const H = this.canvasH;
+    // 先在 2 倍尺寸无背景绘制，再降采样到实际画布尺寸，边缘更干净（超采样抗锯齿）
     const big = document.createElement('canvas');
-    big.width = CANVAS_W * superSample;
-    big.height = CANVAS_H * superSample;
+    big.width = W * superSample;
+    big.height = H * superSample;
     const bctx = big.getContext('2d');
     bctx.setTransform(superSample, 0, 0, superSample, 0, 0);
     bctx.save();
     bctx.beginPath();
-    bctx.rect(0, 0, CANVAS_W, CANVAS_H);
+    bctx.rect(0, 0, W, H);
     bctx.clip();
+    if (this.bg) drawBackground(bctx, W, H, this.bg);
     for (const item of this.items) {
       this._drawItem(bctx, item, { x: 0, y: 0, z: 1 }, true);
     }
     bctx.restore();
 
     const c = document.createElement('canvas');
-    c.width = CANVAS_W;
-    c.height = CANVAS_H;
+    c.width = W;
+    c.height = H;
     const ctx = c.getContext('2d');
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(big, 0, 0, CANVAS_W, CANVAS_H);
+    ctx.drawImage(big, 0, 0, W, H);
 
     const blob = await new Promise((resolve) => c.toBlob(resolve, 'image/png'));
     return { blob, canvas: c };
   }
+}
+
+/**
+ * 背景绘制：把图片按「铺满画布」缩放后再乘 zoom，并以 (cx, cy) 对齐画布中心。
+ * 存的是归一化位置而不是裁切矩形，所以切换画布比例时背景会自动重新铺满。
+ */
+export function drawBackground(ctx, W, H, bg) {
+  if (!bg || !bg.src) return;
+  const { src, zoom = 1 } = bg;
+  const cx = bg.cx ?? 0.5;
+  const cy = bg.cy ?? 0.5;
+  const s = Math.max(W / src.width, H / src.height) * zoom;
+  const dw = src.width * s;
+  const dh = src.height * s;
+  ctx.drawImage(src, W / 2 - cx * dw, H / 2 - cy * dh, dw, dh);
 }

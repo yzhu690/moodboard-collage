@@ -1,5 +1,6 @@
 import { Matting, limitSize } from './matting.js';
-import { Editor, CANVAS_W, CANVAS_H, FONTS, measureTextItem } from './editor.js';
+import { Editor, RATIO_PRESETS, drawBackground, FONTS, measureTextItem } from './editor.js';
+import { t, getLang, setLang, initLang, applyI18n } from './i18n.js';
 
 const MAX_ASSETS = 30;
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -10,6 +11,7 @@ const state = {
   assets: new Map(),
   matting: new Matting(),
   ready: false,
+  engineMode: 'loading',
 };
 
 /* ---------------- 通用 UI ---------------- */
@@ -27,7 +29,7 @@ function toast(msg, ms = 2600) {
 }
 
 let dialogResolve = null;
-function showDialog({ title, desc = '', mediaHTML = '', wide = false, actions = [{ label: '知道了', kind: 'primary', value: true }] }) {
+function showDialog({ title, desc = '', mediaHTML = '', wide = false, actions = [{ label: t('dlg.ok'), kind: 'primary', value: true }] }) {
   const veil = $('dialog');
   veil.querySelector('.dialog-card').classList.toggle('is-wide', !!wide);
   $('dlgTitle').textContent = title;
@@ -172,11 +174,11 @@ function renderLibrary() {
 
 function requestDelete(asset) {
   showDialog({
-    title: '删除这个素材？',
-    desc: '画布上使用它的素材也会一起移除，操作不可撤销。',
+    title: t('dlg.deleteAsset.title'),
+    desc: t('dlg.deleteAsset.desc'),
     actions: [
-      { label: '取消', value: false },
-      { label: '删除', kind: 'primary', value: true },
+      { label: t('dlg.cancel'), value: false },
+      { label: t('dlg.delete'), kind: 'primary', value: true },
     ],
   }).then((ok) => {
     if (!ok) return;
@@ -184,7 +186,7 @@ function requestDelete(asset) {
     editor.removeItemsByAsset(asset.id);
     renderLibrary();
     updateChrome();
-    toast('素材已删除');
+    toast(t('toast.assetDeleted'));
   });
 }
 
@@ -225,7 +227,7 @@ async function addFile(file) {
     console.error(err);
     tile.remove();
     renderLibrary();
-    toast(`「${file.name}」处理失败，请换一张图片试试`);
+    toast(t('toast.fileFail', { name: file.name }));
     return false;
   }
 }
@@ -256,11 +258,11 @@ function loadImageEl(file) {
 let processing = false;
 async function handleFiles(fileList) {
   if (!state.ready) {
-    toast('抠图模型还在加载，请稍候…');
+    toast(t('toast.notReady'));
     return;
   }
   if (processing) {
-    toast('上一批图片还在处理中，请稍候');
+    toast(t('toast.busyUpload'));
     return;
   }
   const files = Array.from(fileList || []);
@@ -275,21 +277,27 @@ async function handleFiles(fileList) {
     if (f.size > MAX_BYTES) { rejectedSize.push(f.name); continue; }
     accepted.push(f);
   }
-  if (rejectedType.length) toast(`仅支持 JPG / PNG：${rejectedType.slice(0, 2).join('、')}${rejectedType.length > 2 ? ' 等' : ''} 已跳过`, 3200);
-  if (rejectedSize.length) toast(`${rejectedSize[0]}${rejectedSize.length > 1 ? ' 等' : ''} 超过 5MB，已跳过`, 3200);
+  if (rejectedType.length) {
+    const names = rejectedType.slice(0, 2).join('、') + (rejectedType.length > 2 ? (getLang() === 'zh' ? ' 等' : ', …') : '');
+    toast(t('toast.badType', { names }), 3200);
+  }
+  if (rejectedSize.length) {
+    const names = rejectedSize[0] + (rejectedSize.length > 1 ? (getLang() === 'zh' ? ' 等' : ' +') : '');
+    toast(t('toast.tooBig', { names }), 3200);
+  }
 
   const room = MAX_ASSETS - state.assets.size;
   if (room <= 0) {
     showDialog({
-      title: '素材库已满',
-      desc: '素材库已满，请先删除不需要的素材再上传。',
-      actions: [{ label: '知道了', kind: 'primary', value: true }],
+      title: t('dlg.assetMax.title'),
+      desc: t('dlg.assetMax.desc'),
+      actions: [{ label: t('dlg.ok'), kind: 'primary', value: true }],
     });
     return;
   }
   let queue = accepted;
   if (queue.length > room) {
-    toast(`素材库最多保存 ${MAX_ASSETS} 个素材，本次先处理 ${room} 张`, 3400);
+    toast(t('toast.roomLimit', { max: MAX_ASSETS, n: room }), 3400);
     queue = queue.slice(0, room);
   }
 
@@ -340,6 +348,9 @@ function updateChrome() {
   }
   $('emptyTip').style.opacity = editor.items.length ? '0' : '1';
   $('canvasTag').style.opacity = editor.items.length ? '1' : '0.9';
+  $('canvasTag').textContent = t('canvas.tag', {
+    w: editor.canvasW, h: editor.canvasH, ratio: editor.ratio,
+  });
   $('zoomLabel').textContent = Math.round(editor.cam.z * 100) + '%';
 }
 
@@ -466,7 +477,7 @@ async function ensureAutoCut(item, asset) {
     return item.autoCut;
   } catch (err) {
     console.error(err);
-    toast('自动抠图失败，可以改用「蒙版修图」手动擦除', 3200);
+    toast(t('toast.cutFail'), 3200);
     return null;
   } finally {
     setModeBusy(false);
@@ -733,7 +744,7 @@ function closeMask(apply) {
     item.mode = 'mask';
     composeItem(item, asset);
     editor.dirty = true;
-    toast('蒙版已更新（只影响画布上这一张）');
+    toast(t('toast.maskUpdated'));
   }
   maskState.open = false;
   maskState.item = null;
@@ -744,43 +755,245 @@ function closeMask(apply) {
   updateChrome();
 }
 
+/* ---------------- 自定义背景 ---------------- */
+
+const bgState = {
+  open: false,
+  src: null,
+  cx: 0.5,
+  cy: 0.5,
+  zoom: 1,
+  dragging: false,
+  lastX: 0,
+  lastY: 0,
+  w: 0,
+  h: 0,
+  dpr: 1,
+};
+
+function updateBgButton() {
+  const has = !!editor.bg;
+  $('btnBg').textContent = has ? t('side.bgChange') : t('side.bgAdd');
+  $('btnBg').title = t('side.bgEmpty');
+  $('btnBgRemove').hidden = !has;
+}
+
+/** 背景统一转成 canvas：ImageBitmap 是可 close 的对象，直接留着会在导出时变成 detached */
+function normalizeBgSource(bitmap) {
+  const MAX = 2400;
+  const k = Math.min(1, MAX / Math.max(bitmap.width, bitmap.height));
+  const c = makeCanvas(Math.round(bitmap.width * k), Math.round(bitmap.height * k));
+  c.getContext('2d').drawImage(bitmap, 0, 0, c.width, c.height);
+  return c;
+}
+
+async function loadBgImage(file) {
+  try {
+    const bitmap = await loadBitmap(file);
+    const src = normalizeBgSource(bitmap);
+    bitmap.close?.();
+    openBgModal(src);
+  } catch (err) {
+    console.error(err);
+    toast(t('toast.bgFail'));
+  }
+}
+
+function openBgModal(src) {
+  bgState.src = src;
+  bgState.cx = 0.5;
+  bgState.cy = 0.5;
+  bgState.zoom = 1;
+  bgState.open = true;
+
+  $('bgModal').hidden = false;
+  $('bgZoom').value = '100';
+  $('bgZoomVal').textContent = '100%';
+  $('bgRemove').hidden = !editor.bg;
+  $('bgRatioTip').textContent = t('bg.ratio', {
+    ratio: editor.ratio, w: editor.canvasW, h: editor.canvasH,
+  });
+  layoutBgCanvas();
+  drawBgPreview();
+}
+
+/** 预览画布按当前画布比例铺满弹窗，所见即导出结果 */
+function layoutBgCanvas() {
+  const stage = $('bgStage');
+  const rect = stage.getBoundingClientRect();
+  const pad = 18;
+  const availW = Math.max(120, rect.width - pad * 2);
+  const availH = Math.max(120, rect.height - pad * 2);
+  const k = Math.min(availW / editor.canvasW, availH / editor.canvasH);
+  const dw = Math.max(80, Math.round(editor.canvasW * k));
+  const dh = Math.max(80, Math.round(editor.canvasH * k));
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const c = $('bgCanvas');
+  c.width = Math.round(dw * dpr);
+  c.height = Math.round(dh * dpr);
+  c.style.width = dw + 'px';
+  c.style.height = dh + 'px';
+  bgState.w = dw;
+  bgState.h = dh;
+  bgState.dpr = dpr;
+}
+
+function bgMetrics() {
+  const { src, w, h, zoom } = bgState;
+  if (!src) return { dw: w, dh: h };
+  const s = Math.max(w / src.width, h / src.height) * zoom;
+  return { dw: src.width * s, dh: src.height * s };
+}
+
+function clampBg() {
+  const { dw, dh } = bgMetrics();
+  const mx = bgState.w / (2 * dw);
+  const my = bgState.h / (2 * dh);
+  bgState.cx = Math.min(1 - mx, Math.max(mx, bgState.cx));
+  bgState.cy = Math.min(1 - my, Math.max(my, bgState.cy));
+}
+
+function drawBgPreview() {
+  const c = $('bgCanvas');
+  const ctx = c.getContext('2d');
+  const { dpr, w, h } = bgState;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, w, h);
+  ctx.clip();
+  if (bgState.src) {
+    ctx.imageSmoothingQuality = 'high';
+    drawBackground(ctx, w, h, bgState);
+  }
+  ctx.restore();
+
+  // 三分线
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255, 253, 249, .38)';
+  ctx.lineWidth = 1;
+  for (const f of [1 / 3, 2 / 3]) {
+    ctx.beginPath();
+    ctx.moveTo(Math.round(w * f) + .5, 0);
+    ctx.lineTo(Math.round(w * f) + .5, h);
+    ctx.moveTo(0, Math.round(h * f) + .5);
+    ctx.lineTo(w, Math.round(h * f) + .5);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  ctx.save();
+  ctx.strokeStyle = 'rgba(160, 143, 120, .55)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(.5, .5, w - 1, h - 1);
+  ctx.restore();
+}
+
+function bgPos(e) {
+  const r = $('bgCanvas').getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+
+function closeBg(apply, remove = false) {
+  if (!bgState.open) return;
+  if (apply) {
+    if (remove) {
+      editor.setBackground(null);
+      toast(t('toast.bgRemoved'));
+    } else if (bgState.src) {
+      clampBg();
+      editor.setBackground({
+        src: bgState.src,
+        cx: bgState.cx,
+        cy: bgState.cy,
+        zoom: bgState.zoom,
+      });
+      toast(t('toast.bgAdded'));
+    }
+  }
+  bgState.open = false;
+  bgState.dragging = false;
+  $('bgModal').hidden = true;
+  updateBgButton();
+  updateChrome();
+}
+
+function bindBgCanvas() {
+  const c = $('bgCanvas');
+  c.addEventListener('pointerdown', (e) => {
+    if (!bgState.open) return;
+    e.preventDefault();
+    c.setPointerCapture(e.pointerId);
+    bgState.dragging = true;
+    const p = bgPos(e);
+    bgState.lastX = p.x;
+    bgState.lastY = p.y;
+    c.style.cursor = 'grabbing';
+  });
+  c.addEventListener('pointermove', (e) => {
+    if (!bgState.open || !bgState.dragging) return;
+    const p = bgPos(e);
+    const { dw, dh } = bgMetrics();
+    bgState.cx -= (p.x - bgState.lastX) / dw;
+    bgState.cy -= (p.y - bgState.lastY) / dh;
+    bgState.lastX = p.x;
+    bgState.lastY = p.y;
+    clampBg();
+    drawBgPreview();
+  });
+  const up = () => {
+    bgState.dragging = false;
+    c.style.cursor = 'grab';
+  };
+  c.addEventListener('pointerup', up);
+  c.addEventListener('pointercancel', up);
+}
+
 /* ---------------- 导出 ---------------- */
 
 async function doExport() {
+  const W = editor.canvasW;
+  const H = editor.canvasH;
+  const bgText = editor.bg ? t('dlg.export.bg') : t('dlg.export.noBg');
   const ok = await showDialog({
-    title: '导出中心画布',
+    title: t('dlg.export.title'),
     wide: true,
-    desc: `即将导出中心画布透明背景 PNG，固定 ${CANVAS_W} × ${CANVAS_H}px，带 Alpha 通道。\n灰色暂放区、构图指引与所有辅助线都不会被打入图片。`,
+    desc: t('dlg.export.desc', { w: W, h: H, ratio: editor.ratio, bg: bgText }),
     actions: [
-      { label: '取消', value: false },
-      { label: '导出', kind: 'primary', value: true },
+      { label: t('dlg.cancel'), value: false },
+      { label: t('dlg.export.export'), kind: 'primary', value: true },
     ],
   });
   if (!ok) return;
 
   try {
     const { blob, canvas } = await editor.exportPNG(2);
-    if (!blob) throw new Error('图片编码失败');
+    if (!blob) throw new Error('encode failed');
 
     const url = URL.createObjectURL(blob);
-    triggerDownload(url, `moodboard-${stamp()}.png`);
+    const name = `moodboard-${editor.ratio.replace(':', 'x')}-${stamp()}.png`;
+    triggerDownload(url, name);
     setTimeout(() => URL.revokeObjectURL(url), 120000);
 
     showDialog({
-      title: 'PNG 已生成',
-      desc: `${canvas.width} × ${canvas.height}px · 透明背景（Alpha 通道）\n如果浏览器没有自动下载，可能是下载被拦截：右键下方图片「存储为」即可保存原图，或在地址栏右侧允许本站下载后点「再次下载」。`,
-      mediaHTML: `<img src="${url}" alt="导出预览" />`,
+      title: t('dlg.done.title'),
+      desc: t('dlg.done.desc', {
+        w: canvas.width, h: canvas.height, bg: bgText,
+      }),
+      mediaHTML: `<img src="${url}" alt="export preview" />`,
       actions: [
-        { label: '关闭', value: false },
-        { label: '再次下载', kind: 'primary', value: true, onClick: () => triggerDownload(url, `moodboard-${stamp()}.png`) },
+        { label: t('dlg.close'), value: false },
+        { label: t('dlg.again'), kind: 'primary', value: true, onClick: () => triggerDownload(url, name) },
       ],
     });
   } catch (err) {
     console.error(err);
     showDialog({
-      title: '导出失败',
-      desc: `生成图片时出错：${err.message || '未知错误'}\n\n可以试试：\n· 在浏览器地址栏允许本站点下载文件\n· 关闭下载拦截插件后重试\n· 换用最新版 Chrome / Edge / Safari 打开本页面`,
-      actions: [{ label: '知道了', kind: 'primary', value: true }],
+      title: t('dlg.fail.title'),
+      desc: t('dlg.fail.desc', { msg: err.message || 'unknown' }),
+      actions: [{ label: t('dlg.ok'), kind: 'primary', value: true }],
     });
   }
 }
@@ -809,7 +1022,20 @@ function setProgress(p, step) {
   if (step) $('loaderStep').textContent = step;
 }
 
-function setEngineTag(cls, text) {
+function setEngineTag(mode) {
+  state.engineMode = mode;
+  refreshEngineTag();
+}
+
+/** 语言切换后需要重刷的引擎状态文案 */
+function refreshEngineTag() {
+  const map = {
+    loading: ['', t('engine.loading')],
+    ready: ['ready', t('engine.ready')],
+    compatWasm: ['warn', t('engine.compatWasm')],
+    compatHeuristic: ['warn', t('engine.compatHeuristic')],
+  };
+  const [cls, text] = map[state.engineMode] || map.loading;
   const tag = $('engineTag');
   tag.className = 'engine-tag ' + cls;
   $('engineText').textContent = text;
@@ -821,27 +1047,27 @@ function unlock() {
 }
 
 /** 模型不可用时静默切到兼容抠图，直接进入界面，不弹任何错误提示 */
-function fallbackToCompat(text) {
+function fallbackToCompat(mode) {
   state.matting.useHeuristic();
-  setEngineTag('warn', text);
+  setEngineTag(mode || 'compatHeuristic');
   unlock();
   $('loader').hidden = true;
 }
 
 async function boot() {
   if (!Matting.wasmSupported()) {
-    fallbackToCompat('兼容抠图模式（当前浏览器不支持 WASM）');
+    fallbackToCompat('compatWasm');
     return;
   }
   try {
     await state.matting.init((p, step) => setProgress(p, step));
-    setProgress(1, '模型已就绪');
-    setEngineTag('ready', '本地抠图模型已就绪 · 图片不出本机');
+    setProgress(1, t('engine.ready'));
+    setEngineTag('ready');
     unlock();
     setTimeout(() => { $('loader').hidden = true; }, 320);
   } catch (err) {
     console.warn('本地抠图模型加载失败，自动使用兼容模式', err);
-    fallbackToCompat('兼容抠图模式（边缘识别）');
+    fallbackToCompat('compatHeuristic');
   }
 }
 
@@ -893,17 +1119,17 @@ function bind() {
   $('btnReset').onclick = () => {
     editor.resetView();
     updateChrome();
-    toast('视图已重置：画布回到居中，内容没有任何删改');
+    toast(t('toast.viewReset'));
   };
   $('btnExport').onclick = doExport;
   $('btnClear').onclick = async () => {
-    if (!editor.items.length) { toast('画布已经是空的'); return; }
+    if (!editor.items.length) { toast(t('toast.canvasEmpty')); return; }
     const ok = await showDialog({
-      title: '清空画布？',
-      desc: '清空后当前拼图不会被保存，也无法撤销。\n左侧素材库会保留，可以重新拖入。',
+      title: t('dlg.clear.title'),
+      desc: t('dlg.clear.desc'),
       actions: [
-        { label: '取消', value: false },
-        { label: '清空', kind: 'primary', value: true },
+        { label: t('dlg.cancel'), value: false },
+        { label: t('dlg.clear.action'), kind: 'primary', value: true },
       ],
     });
     if (!ok) return;
@@ -911,8 +1137,34 @@ function bind() {
     editor.select(null);
     editor.dirty = true;
     updateChrome();
-    toast('画布已清空，素材库保留');
+    toast(t('toast.canvasCleared'));
   };
+
+  // 语言切换（界面为静态文案，切换后整页重刷 + 画布骨架重绘）
+  $('btnLang').onclick = () => {
+    setLang(getLang() === 'zh' ? 'en' : 'zh');
+    applyI18n();
+    $('btnLang').textContent = t('top.lang');
+    $('btnLang').title = t('top.lang.title');
+    refreshEngineTag();
+    updateBgButton();
+    updateChrome();
+    editor.dirty = true;
+  };
+
+  // 画布比例
+  $('ratioSeg').addEventListener('click', (e) => {
+    const b = e.target.closest('.seg-btn');
+    if (!b) return;
+    const preset = RATIO_PRESETS.find((p) => p.id === b.dataset.ratio);
+    if (!preset) return;
+    [...$('ratioSeg').children].forEach((x) => x.classList.toggle('is-on', x === b));
+    const changed = editor.setCanvasSize(preset.w, preset.h, preset.id);
+    updateChrome();
+    if (changed) {
+      toast(t('toast.ratioChanged', { ratio: preset.id, w: preset.w, h: preset.h }));
+    }
+  });
 
   // 骨架切换
   $('guideSwitch').addEventListener('click', (e) => {
@@ -993,17 +1245,17 @@ function bind() {
     drawMaskPreview(maskState.cursor);
   };
   $('maskUndo').onclick = () => {
-    if (!doMaskUndo()) toast('没有可撤销的操作');
+    if (!doMaskUndo()) toast(t('toast.noUndo'));
   };
   $('maskRedo').onclick = () => {
-    if (!doMaskRedo()) toast('没有可重做的操作');
+    if (!doMaskRedo()) toast(t('toast.noRedo'));
   };
   $('maskReset').onclick = () => {
     pushUndo();
     const ctx = maskState.tmp.getContext('2d');
     ctx.clearRect(0, 0, maskState.tmp.width, maskState.tmp.height);
     drawMaskPreview(maskState.cursor);
-    toast('已清空所有蒙版笔迹');
+    toast(t('toast.maskReset'));
   };
 
   // 快捷键：⌘/Ctrl + Z 撤销，⌘/Ctrl + Shift + Z 重做
@@ -1019,12 +1271,46 @@ function bind() {
   });
   bindMaskCanvas();
 
+  // 画布背景
+  $('btnBg').onclick = () => $('bgFile').click();
+  $('bgFile').onchange = (e) => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (f) loadBgImage(f);
+  };
+  $('btnBgRemove').onclick = () => {
+    editor.setBackground(null);
+    updateBgButton();
+    updateChrome();
+    toast(t('toast.bgRemoved'));
+  };
+  $('bgClose').onclick = () => closeBg(false);
+  $('bgCancel').onclick = () => closeBg(false);
+  $('bgDone').onclick = () => closeBg(true);
+  $('bgRemove').onclick = () => closeBg(true, true);
+  $('bgZoom').oninput = (e) => {
+    bgState.zoom = Number(e.target.value) / 100;
+    $('bgZoomVal').textContent = e.target.value + '%';
+    clampBg();
+    drawBgPreview();
+  };
+  $('bgModal').addEventListener('pointerdown', (e) => {
+    if (e.target === $('bgModal')) closeBg(false);
+  });
+  bindBgCanvas();
+
   // 弹窗背景关闭
   $('dialog').addEventListener('pointerdown', (e) => {
     if (e.target === $('dialog')) closeDialog(false);
   });
 
-  window.addEventListener('resize', () => updateChrome());
+  window.addEventListener('resize', () => {
+    updateChrome();
+    if (bgState.open) {
+      layoutBgCanvas();
+      drawBgPreview();
+    }
+  });
   window.addEventListener('beforeunload', (e) => {
     if (editor.items.length) {
       e.preventDefault();
@@ -1053,9 +1339,15 @@ function loadHandFonts() {
 
 /* ---------------- 启动 ---------------- */
 
+initLang();
+applyI18n();
+$('btnLang').textContent = t('top.lang');
+$('btnLang').title = t('top.lang.title');
+
 renderLibrary();
+updateBgButton();
 bind();
 updateChrome();
-setProgress(0.02, '准备中…');
+setProgress(0.02, t('loader.step'));
 loadHandFonts();
 boot();

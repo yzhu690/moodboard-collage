@@ -278,12 +278,14 @@ button { font-family: inherit; color: inherit; }
 
 .side-sub {
   display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; flex-wrap: wrap;
   padding: 2px 2px 0;
 }
 .side-sub > span {
   font-size: 11px; letter-spacing: .16em; color: #a99f92; text-transform: uppercase;
+  white-space: nowrap;
 }
-.text-btns { display: flex; gap: 6px; }
+.text-btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
 .chip {
   height: 27px; padding: 0 10px;
   border-radius: 8px; border: 1px solid var(--line);
@@ -767,4 +769,62 @@ button { font-family: inherit; color: inherit; }
   .brand-text em { display: none; }
   .guide-btn span { display: none; }
   .guide-btn { padding: 7px 9px; }
+}
+
+/* ---------- 画布比例 & 语言切换 ---------- */
+.ratio-bar {
+  position: absolute; left: 16px; bottom: 18px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 6px 4px 11px;
+  background: rgba(253, 251, 247, .92);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(6px);
+  z-index: 11;
+  animation: barIn2 .24s var(--ease) both;
+}
+.ratio-bar .seg { padding: 2px; }
+.ratio-bar .seg-btn {
+  padding: 3px 8px; font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  min-width: 38px;
+}
+/* 位置圆控件让位给比例条 */
+.countbar { bottom: 62px; }
+
+.lang-btn {
+  min-width: 44px; padding: 0 10px;
+  font-size: 11.5px; letter-spacing: .04em;
+}
+
+.chip.ghost { background: transparent; border-color: transparent; color: #a2988a; }
+.chip.ghost:hover { color: #a5675a; background: #fbefec; border-color: #efd8d2; }
+.chip[hidden] { display: none; }
+
+/* ---------- 背景裁剪弹窗 ---------- */
+.bg-card { width: min(760px, 100%); }
+.bg-stage {
+  margin: 14px 0 12px;
+  height: min(58vh, 500px);
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  overflow: hidden;
+  background: #efeae1;
+  display: grid; place-items: center;
+}
+#bgCanvas {
+  display: block; cursor: grab; touch-action: none;
+  background: #f4efe6;
+  box-shadow: 0 8px 26px rgba(88, 72, 53, .18);
+}
+.bg-stage .brush-tip { color: #b7ac9c; }
+
+/* 英文文案更长：允许在词边界换行，中文仍保持单行 */
+html[lang="en"] .upload-hint .nowrap { white-space: normal; }
+html[lang="en"] .upload-hint { font-size: 10.5px; }
+
+/* 窄屏时选中工具条上移，避免压住左下角的比例条 */
+@media (max-width: 1240px) {
+  .selbar { bottom: 66px; }
 }
