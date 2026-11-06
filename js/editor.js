@@ -3,7 +3,7 @@
  * 预览与导出使用同一套绘制逻辑，导出时只保留中心画布区域（尺寸随比例变化）。
  */
 
-import { t } from './i18n.js';
+import { t } from './i18n.js?v=20261106a';
 
 /** 画布比例预设：竖版两档对齐小红书常用尺寸 */
 export const RATIO_PRESETS = [

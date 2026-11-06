@@ -1,6 +1,6 @@
-import { Matting, limitSize } from './matting.js';
-import { Editor, RATIO_PRESETS, drawBackground, FONTS, measureTextItem } from './editor.js';
-import { t, getLang, setLang, initLang, applyI18n } from './i18n.js';
+import { Matting, limitSize } from './matting.js?v=20261106a';
+import { Editor, RATIO_PRESETS, drawBackground, FONTS, measureTextItem } from './editor.js?v=20261106a';
+import { t, getLang, setLang, initLang, applyI18n } from './i18n.js?v=20261106a';
 
 const MAX_ASSETS = 30;
 const MAX_BYTES = 5 * 1024 * 1024;
