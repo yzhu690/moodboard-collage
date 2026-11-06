@@ -1,5 +1,7 @@
 <div align="center">
 
+<a id="zh"></a>
+
 # 拼贴台 · Collage Board
 
 **手作素材的拼贴工作台** — 纯前端，打开即用，图片不出本机
@@ -131,7 +133,7 @@ docs/                 README 截图
 
 **A collage workspace for handmade material** — pure front-end, opens in the browser, images never leave your machine.
 
-[**Live demo**](https://moodboard-collage.app.workbuddy.host/?sharecode=JNISRK6PRS) · [中文](#拼贴台--collage-board)
+[**Live demo**](https://moodboard-collage.app.workbuddy.host/?sharecode=JNISRK6PRS) · [中文](#zh)
 
 If you make things by hand — textiles, ceramics, craft patterns, that beam of light on the windowsill — you probably have a folder of photos and no patience for Photoshop. Collage Board turns that into a fifteen-minute job: drop images in, arrange them, cut out what you need, export a transparent PNG.
 
